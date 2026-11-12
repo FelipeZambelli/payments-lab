@@ -45,6 +45,20 @@ flowchart LR
   os demais serviços rodam nativos em ARM64.
 - Pelo menos 4 GB de memória para o Docker (*Settings → Resources*).
 - .NET 10 SDK, apenas para rodar o LoadGen (ou para desenvolver fora dos containers).
+  Alternativa: o Dev Container abaixo, que já traz tudo.
+
+### Dev Container (opcional)
+
+`.devcontainer/` traz um ambiente pronto, nativo em ARM64 no Mac M1: .NET 10 SDK, Docker CLI + Compose
+(docker-outside-of-docker), Azure CLI, AWS CLI e GitHub CLI. No VS Code, com a extensão *Dev Containers*:
+*Command Palette → "Dev Containers: Reopen in Container"*. Na criação ele roda `dotnet restore`.
+
+- O Docker usado lá dentro é o do Mac (pelo socket): `docker compose up` sobe a stack **ao lado** do
+  devcontainer, não dentro dele, e `docker compose ps` mostra os mesmos containers.
+- Dentro do devcontainer, `localhost` é o próprio devcontainer. Para falar com a stack use
+  `host.docker.internal`, por exemplo:
+  `dotnet run --project tools/LoadGen -- --url http://host.docker.internal:8080`.
+  No navegador do Mac continua `http://localhost:8080` e `http://localhost:15672`.
 
 ## Como subir
 

@@ -1,0 +1,39 @@
+// Dev Container do payments-lab. Imagem e features são multi-arch: no Mac Apple Silicon tudo roda
+// nativo em ARM64 (só o SQL Server do Compose é emulado, e ele roda fora deste container).
+{
+  "name": "payments-lab",
+
+  // .NET 10 SDK já vem na imagem.
+  "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
+
+  "features": {
+    // Usa o Docker do host (Docker Desktop) pelo socket: "docker compose" aqui dentro
+    // sobe os containers no Mac, ao lado deste, e não dentro dele.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    },
+    "ghcr.io/devcontainers/features/azure-cli:1": {},
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // Os serviços do Compose publicam portas no host. Daqui de dentro, "localhost" é o próprio
+  // devcontainer: use host.docker.internal (ex.: LoadGen com --url http://host.docker.internal:8080).
+  "containerEnv": {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_NOLOGO": "1"
+  },
+
+  "postCreateCommand": "dotnet restore PaymentsLab.slnx",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-azuretools.vscode-containers"
+      ]
+    }
+  },
+
+  "remoteUser": "vscode"
+}
