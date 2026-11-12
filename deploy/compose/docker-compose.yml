@@ -1,0 +1,92 @@
+name: payments-lab
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # Não existe imagem ARM64 do SQL Server 2022: roda emulado (Rosetta no Docker Desktop).
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?defina MSSQL_SA_PASSWORD no .env}
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q 'SELECT 1' -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    # Hostname fixo: o RabbitMQ guarda dados por nome de nó, então isso mantém o volume válido.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?defina RABBITMQ_USER no .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no .env}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build:
+      context: ../..
+      dockerfile: src/Autorizador.Api/Dockerfile
+    environment:
+      ConnectionStrings__Sql: "Server=sqlserver,1433;Database=PaymentsLab;User Id=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True"
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__UserName: ${RABBITMQ_USER}
+      RabbitMq__Password: ${RABBITMQ_PASSWORD}
+      CHAOS_SQL_DELAY_MS: ${CHAOS_SQL_DELAY_MS:-0}
+      CHAOS_ERROR_RATE: ${CHAOS_ERROR_RATE:-0}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      # A imagem aspnet não tem curl/wget: faz o GET pelo /dev/tcp do bash e exige "200" na status line.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: src/Terminal.Worker/Dockerfile
+    environment:
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__UserName: ${RABBITMQ_USER}
+      RabbitMq__Password: ${RABBITMQ_PASSWORD}
+      API_URL: http://api:8080/
+      TERMINAIS: ${TERMINAIS:-1-50}
+      PREFETCH: ${PREFETCH:-10}
+      CHAOS_WORKER_PAUSED: ${CHAOS_WORKER_PAUSED:-false}
+    # Tempo entre o SIGTERM e o SIGKILL. Maior que o HostOptions.ShutdownTimeout (25s) do Worker,
+    # para o shutdown gracioso terminar as mensagens em voo.
+    stop_grace_period: 30s
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  sqlserver-data:
+  rabbitmq-data:
