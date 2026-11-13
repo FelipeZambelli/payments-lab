@@ -39,7 +39,7 @@ Não é produção. Repositório público. Priorizar código claro e idiomático
 - Nenhuma referência a empresas, produtos ou clientes reais. Domínio 100% fictício.
 
 ## Não fazer (fica para tópicos futuros)
-- Não adicionar OpenTelemetry, logging estruturado avançado, testes, CI, Kubernetes ou Terraform.
+- Não adicionar logging estruturado avançado, testes, CI, Kubernetes ou Terraform.
   Deixar apenas ILogger padrão. Cada um desses entra em um tópico específico da trilha.
 
 ## Aceite
