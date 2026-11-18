@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Configuração de OpenTelemetry comum à API e ao Worker (no estilo dos ServiceDefaults do Aspire).
+    Só depende de pacotes que funcionam sem ASP.NET Core: o Worker roda na imagem "runtime".
+  -->
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.21.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.21.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.21.0" />
+  </ItemGroup>
+
+</Project>

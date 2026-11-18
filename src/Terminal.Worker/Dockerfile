@@ -6,10 +6,12 @@ WORKDIR /src
 
 COPY Directory.Build.props ./
 COPY src/Lab.Contracts/Lab.Contracts.csproj src/Lab.Contracts/
+COPY src/Lab.Telemetria/Lab.Telemetria.csproj src/Lab.Telemetria/
 COPY src/Terminal.Worker/Terminal.Worker.csproj src/Terminal.Worker/
 RUN dotnet restore src/Terminal.Worker/Terminal.Worker.csproj -a $TARGETARCH
 
 COPY src/Lab.Contracts/ src/Lab.Contracts/
+COPY src/Lab.Telemetria/ src/Lab.Telemetria/
 COPY src/Terminal.Worker/ src/Terminal.Worker/
 RUN dotnet publish src/Terminal.Worker/Terminal.Worker.csproj -c Release -a $TARGETARCH --no-restore -o /app
 

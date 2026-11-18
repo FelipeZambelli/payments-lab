@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Autorizador.Api/Autorizador.Api.csproj" />
     <Project Path="src/Lab.Contracts/Lab.Contracts.csproj" />
+    <Project Path="src/Lab.Telemetria/Lab.Telemetria.csproj" />
     <Project Path="src/Terminal.Worker/Terminal.Worker.csproj" />
   </Folder>
   <Folder Name="/tools/">

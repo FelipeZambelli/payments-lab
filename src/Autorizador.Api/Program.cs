@@ -4,12 +4,22 @@ using Autorizador.Api.Banco;
 using Autorizador.Api.Infra;
 using Autorizador.Api.Mensageria;
 using Autorizador.Api.Saude;
+using Lab.Telemetria;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var sqlConnectionString = builder.Configuration.GetConnectionString("Sql")
     ?? throw new InvalidOperationException("Configure ConnectionStrings__Sql (variável de ambiente).");
 var chaos = ChaosOptions.Ler(builder.Configuration);
+
+builder.AddTelemetria(
+    tracing: t => t
+        // /health/* fica fora: o healthcheck do Compose (a cada 10 s) geraria traces sem valor.
+        .AddAspNetCoreInstrumentation(o => o.Filter = contexto => !contexto.Request.Path.StartsWithSegments("/health"))
+        .AddSqlClientInstrumentation(),
+    metricas: m => m.AddAspNetCoreInstrumentation());
 
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(o =>

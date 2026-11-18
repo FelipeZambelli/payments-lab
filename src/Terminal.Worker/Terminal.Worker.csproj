@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Lab.Contracts\Lab.Contracts.csproj" />
+    <ProjectReference Include="..\Lab.Telemetria\Lab.Telemetria.csproj" />
   </ItemGroup>
 
   <ItemGroup>

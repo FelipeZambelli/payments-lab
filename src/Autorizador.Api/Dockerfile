@@ -7,10 +7,12 @@ WORKDIR /src
 
 COPY Directory.Build.props ./
 COPY src/Lab.Contracts/Lab.Contracts.csproj src/Lab.Contracts/
+COPY src/Lab.Telemetria/Lab.Telemetria.csproj src/Lab.Telemetria/
 COPY src/Autorizador.Api/Autorizador.Api.csproj src/Autorizador.Api/
 RUN dotnet restore src/Autorizador.Api/Autorizador.Api.csproj -a $TARGETARCH
 
 COPY src/Lab.Contracts/ src/Lab.Contracts/
+COPY src/Lab.Telemetria/ src/Lab.Telemetria/
 COPY src/Autorizador.Api/ src/Autorizador.Api/
 RUN dotnet publish src/Autorizador.Api/Autorizador.Api.csproj -c Release -a $TARGETARCH --no-restore -o /app
 

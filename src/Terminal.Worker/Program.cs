@@ -1,8 +1,10 @@
+using Lab.Telemetria;
 using Terminal.Worker.Configuracao;
 using Terminal.Worker.Mensageria;
 using Terminal.Worker.Processamento;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.AddTelemetria();
 
 var opcoes = WorkerOptions.Ler(builder.Configuration);
 builder.Services.AddSingleton(opcoes);
