@@ -205,7 +205,30 @@ public sealed class ConsumidorTerminais(
         span.SetTag("messaging.message.id", entrega.BasicProperties.MessageId);
         span.SetTag("messaging.rabbitmq.message.delivery_tag", (long)entrega.DeliveryTag);
         span.SetTag("lab.tentativa", Tentativa(entrega));
+        if (TempoNaFilaMs(entrega) is { } tempoNaFila)
+            span.SetTag("lab.tempo_na_fila_ms", tempoNaFila);
         return span;
+    }
+
+    /// <summary>
+    /// Agora − header lab-publicado-em (Unix ms, gravado no publish). Só existe para mensagens que
+    /// chegam a ser consumidas; em reentregas o header é o mesmo, então inclui as tentativas anteriores.
+    /// Null se o header faltar (ex.: mensagem publicada à mão no management UI).
+    /// </summary>
+    private static long? TempoNaFilaMs(BasicDeliverEventArgs entrega)
+    {
+        if (entrega.BasicProperties.Headers?.TryGetValue(Topologia.HeaderPublicadoEm, out var valor) != true)
+            return null;
+
+        long? publicadoEm = valor switch
+        {
+            long l => l,
+            int i => i,
+            byte[] bytes when long.TryParse(System.Text.Encoding.UTF8.GetString(bytes), out var l) => l,
+            _ => null,
+        };
+        // Relógios de API e Worker podem divergir um pouco; nunca reporta valor negativo.
+        return publicadoEm is null ? null : Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - publicadoEm.Value);
     }
 
     /// <summary>1 na primeira entrega; x-acquired-count = quantas vezes a mensagem já foi entregue antes.</summary>

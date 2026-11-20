@@ -206,6 +206,101 @@ dotnet run --project ../../tools/LoadGen -- --tps 100 --duracao 20
 Para inspecionar a DLQ: UI do RabbitMQ → *Queues* → `terminais.dlq` → *Get messages*.
 O header `x-first-death-reason` diz por que a mensagem foi parar lá.
 
+## Observabilidade (Tópico 1)
+
+API e Worker usam o SDK do OpenTelemetry (projeto `src/Lab.Telemetria`) para traces, métricas e logs.
+O exporter OTLP só liga quando `OTEL_EXPORTER_OTLP_ENDPOINT` está definido. Sem ele, o Lab sobe como
+antes, sem erro de exporter. Para ver a telemetria, suba com o override do **Aspire Dashboard**:
+
+```bash
+cd deploy/compose
+docker compose -f docker-compose.yml -f compose.aspire.yml up -d --build
+```
+
+Abra http://localhost:18888. A UI fica só no localhost e sem login; a porta OTLP (18889) não é publicada no host.
+O dashboard guarda tudo **em memória**: recriar o container apaga traces, logs e métricas.
+
+### Variáveis `OTEL_*` (definidas em `compose.aspire.yml`)
+
+| Variável | Valor no Lab |
+|---|---|
+| `OTEL_SERVICE_NAME` | `autorizador-api` / `terminal-worker` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://aspire-dashboard:18889` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` |
+| `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment.name=lab` |
+
+### O que olhar no Aspire
+
+- **Traces**: um `POST /autorizacoes` gera **um único trace**, que atravessa a fila do RabbitMQ:
+  ```
+  POST /autorizacoes/                          autorizador-api
+  └ autorizacao.criar
+    ├ SELECT / INSERT / UPDATE                 (SqlClient)
+    └ publish terminais                        Producer, routing_key=terminal.7
+      └ process terminal.{id}                  Consumer, terminal-worker
+        └ POST (HttpClient) → POST /autorizacoes/{id}/confirmacao
+          └ autorizacao.confirmar
+            ├ UPDATE
+            └ publish terminais                routing_key=confirmacao.7 (sem consumidor, ver abaixo)
+  ```
+  Abra o trace e clique num span para ver os atributos e os eventos `exception`, à direita.
+- **Structured logs**: os logs com propriedades (`AutorizacaoId`, `TerminalId`) e o trace-id.
+  Dá para filtrar por propriedade ou ir do log para o trace.
+- **Metrics**: escolha o recurso no seletor. O padrão de exportação é 60 s, então o primeiro dado leva até 1 minuto.
+  Os meters são `Microsoft.AspNetCore.Hosting` (`http.server.request.duration`), `System.Net.Http` e `System.Runtime`.
+  Métricas de negócio ficam para a Semana 2.
+
+`/health/*` fica fora dos traces: o healthcheck do Compose geraria um trace a cada 10 s.
+
+### Spans próprios (ActivitySource `PaymentsLab`)
+
+| Span | Tipo | Atributos |
+|---|---|---|
+| `autorizacao.criar` | Internal | `autorizacao.id`, `terminal.id`, `autorizacao.bandeira`, `autorizacao.idempotente` |
+| `autorizacao.confirmar` | Internal | `autorizacao.id`, `terminal.id`, `autorizacao.ja_confirmada` (ou `autorizacao.encontrada=false`) |
+| `publish terminais` | Producer | `messaging.system=rabbitmq`, `messaging.operation.type=send`, `messaging.operation.name=publish`, `messaging.destination.name=terminais`, `messaging.rabbitmq.destination.routing_key`, `messaging.message.id` |
+| `process terminal.{id}` | Consumer | `messaging.operation.type=process`, `messaging.destination.template=terminal.{id}`, `messaging.destination.name` (fila real), `messaging.rabbitmq.message.delivery_tag`, `messaging.message.id`, `lab.tentativa`, `lab.desfecho` (`ack`, `requeue`, `dlq` ou `abortado`), `lab.tempo_na_fila_ms` |
+
+- O nome do span de consumo é o **template** `process terminal.{id}`, igual para todos os terminais,
+  para manter a cardinalidade baixa. O terminal real fica só em atributo.
+- **Falhas**: o publish com confirm recusado e o process com requeue ou DLQ registram a exceção no span
+  (`Activity.AddException`, evento `exception`) e ficam com status Error. Quando a falha é uma resposta
+  HTTP (ex.: 500), a exceção é descritiva, por exemplo "API respondeu 500 na confirmação.".
+- **Requeue** aparece como vários spans `process` no mesmo trace, com `lab.tentativa` 1, 2, 3…
+- **O que nunca vai para a telemetria:** PAN, `cartaoToken` e `valor` não entram em spans, métricas, baggage ou logs.
+  Os logs usam message templates e nunca o request inteiro. O SqlClient registra o SQL parametrizado (`@CartaoToken`),
+  nunca os valores.
+
+### Propagação pelo RabbitMQ
+
+O contexto não atravessa a fila sozinho. O publish grava `traceparent` (e `tracestate`) nos headers AMQP,
+e o Worker lê esses headers para criar o span `process` como filho do `publish`
+(`src/Lab.Telemetria/PropagacaoRabbitMq.cs`). A propagação usa só o `TraceContextPropagator`, nunca baggage.
+O header continua na mensagem quando ela vai para a `terminais.dlq`: dá para achar o trace de uma mensagem
+morta pelo trace-id do `traceparent` (2º campo).
+
+### Tempo na fila (`lab.tempo_na_fila_ms`)
+
+O publish grava o header `lab-publicado-em` (Unix ms). O span `process` registra
+`lab.tempo_na_fila_ms = agora − lab-publicado-em`.
+
+- **Só cobre mensagens consumidas.** Uma mensagem que nunca é consumida (Worker parado, fila sem
+  consumidor, descartada pelo broker) não gera span `process`, então o tempo dela na fila não aparece em lugar
+  nenhum. Para isso valem as métricas do broker, como profundidade da fila e idade da mensagem mais antiga (Semana 6).
+- Em **reentregas** (requeue), o header é o mesmo, então o valor inclui as tentativas anteriores:
+  é o tempo desde o publish, e não desde a última volta à fila.
+- Usa os relógios de dois processos (API e Worker). No Compose eles compartilham o relógio do host;
+  valores negativos, de diferença de relógio, viram 0.
+- Por enquanto é só atributo de span, sem métrica (fica para a Semana 2).
+
+### Limitação conhecida: confirmação sem consumidor
+
+`AutorizacaoConfirmada` é publicada com routing key `confirmacao.{terminalId}`, mas **nenhuma fila está
+ligada** a esse routing key. O broker descarta a mensagem em silêncio, **por design, por enquanto**.
+No trace, o último `publish terminais` não tem `process` filho. Um publish sem consumidor é
+**indistinguível de uma mensagem perdida** olhando só o trace. A detecção disso fica para as métricas do
+broker (mensagens publicadas sem rota, Semana 6).
+
 ## Problemas comuns
 
 | Sintoma | Causa provável |
@@ -215,7 +310,11 @@ O header `x-first-death-reason` diz por que a mensagem foi parar lá.
 | `required variable ... is missing` | faltou criar o `.env` (`cp .env.example .env`) |
 | Worker loga `PRECONDITION_FAILED` | argumentos das filas mudaram no código; apague as filas `terminal.*` na UI ou rode `docker compose down -v` |
 | Autorizações ficando Pendente | Worker pausado, terminal fora de `TERMINAIS`, ou mensagem na DLQ |
+| Trace sem spans do `terminal-worker` | API ou Worker rodando imagem antiga: `up -d --build api worker` com o override |
+| Metrics vazio no Aspire | recurso não selecionado, ou ainda não passaram os 60 s do primeiro envio |
+| Chaos da API "some" após mexer no Worker | `up -d worker` também reconcilia a `api` (dependência) sem a variável; use `--no-deps` |
 
 ## Fora do escopo (por enquanto)
 
-OpenTelemetry, logging estruturado, testes, CI, Kubernetes e Terraform ficam para tópicos futuros da trilha.
+Testes, CI, Kubernetes e Terraform ficam para tópicos futuros da trilha. Na observabilidade,
+Collector, Prometheus/Loki/Tempo/Grafana e métricas de negócio vêm nas próximas semanas do Tópico 1 (ver SPEC-T1.md).

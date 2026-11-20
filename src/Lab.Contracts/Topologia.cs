@@ -10,4 +10,7 @@ public static class Topologia
     public static string FilaTerminal(int terminalId) => $"terminal.{terminalId}";
     public static string RoutingKeyTerminal(int terminalId) => $"terminal.{terminalId}";
     public static string RoutingKeyConfirmacao(int terminalId) => $"confirmacao.{terminalId}";
+
+    /// <summary>Header com o instante do publish (Unix ms), para o consumidor medir o tempo na fila.</summary>
+    public const string HeaderPublicadoEm = "lab-publicado-em";
 }

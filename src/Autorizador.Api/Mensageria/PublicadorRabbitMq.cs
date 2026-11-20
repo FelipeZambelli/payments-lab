@@ -73,7 +73,12 @@ public sealed class PublicadorRabbitMq(IOptions<RabbitMqOptions> options, ILogge
         span?.SetTag("messaging.rabbitmq.destination.routing_key", routingKey);
         span?.SetTag("messaging.message.id", messageId.ToString());
 
-        var headers = new Dictionary<string, object?>();
+        var agora = DateTimeOffset.UtcNow;
+        var headers = new Dictionary<string, object?>
+        {
+            // Unix ms (long): o process calcula lab.tempo_na_fila_ms a partir dele.
+            [Topologia.HeaderPublicadoEm] = agora.ToUnixTimeMilliseconds(),
+        };
         PropagacaoRabbitMq.Injetar(span?.Context ?? Activity.Current?.Context ?? default, headers);
 
         var propriedades = new BasicProperties
@@ -82,8 +87,8 @@ public sealed class PublicadorRabbitMq(IOptions<RabbitMqOptions> options, ILogge
             DeliveryMode = DeliveryModes.Persistent,
             MessageId = messageId.ToString(),
             Type = typeof(T).Name,
-            Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-            Headers = headers.Count > 0 ? headers : null,
+            Timestamp = new AmqpTimestamp(agora.ToUnixTimeSeconds()),
+            Headers = headers,
         };
         var corpo = JsonSerializer.SerializeToUtf8Bytes(mensagem, JsonSerializerOptions.Web);
 
