@@ -30,7 +30,8 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 });
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton(new SqlConnectionFactory(sqlConnectionString, chaos));
+builder.Services.AddSingleton(chaos);
+builder.Services.AddSingleton(new SqlConnectionFactory(sqlConnectionString));
 builder.Services.AddSingleton<AutorizacaoRepository>();
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
 builder.Services.AddSingleton<PublicadorRabbitMq>();

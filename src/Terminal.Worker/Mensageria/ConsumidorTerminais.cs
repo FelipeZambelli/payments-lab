@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Lab.Contracts;
+using Lab.Telemetria;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -128,33 +130,44 @@ public sealed class ConsumidorTerminais(
             return;
 
         Interlocked.Increment(ref _emVoo);
+        using var span = IniciarSpanProcess(terminalId, entrega);
         try
         {
-            var desfecho = await processador.ProcessarAsync(entrega.Body, terminalId, _abortar.Token);
+            var (desfecho, erro) = await processador.ProcessarAsync(entrega.Body, terminalId, _abortar.Token);
             switch (desfecho)
             {
                 case Desfecho.Confirmada:
                     await canal.BasicAckAsync(entrega.DeliveryTag, multiple: false);
+                    span?.SetTag("lab.desfecho", "ack");
                     break;
                 case Desfecho.Descartar:
                     await canal.BasicNackAsync(entrega.DeliveryTag, multiple: false, requeue: false);
+                    span?.SetTag("lab.desfecho", "dlq");
                     break;
                 case Desfecho.TentarDeNovo when Tentativa(entrega) >= MaxTentativas:
                     logger.LogWarning("Terminal {TerminalId}: {MaxTentativas} tentativas esgotadas; mensagem vai para a DLQ.", terminalId, MaxTentativas);
                     await canal.BasicNackAsync(entrega.DeliveryTag, multiple: false, requeue: false);
+                    span?.SetTag("lab.desfecho", "dlq");
                     break;
                 case Desfecho.TentarDeNovo:
                     await Task.Delay(EsperaAntesDoRequeue, _abortar.Token);
                     await canal.BasicNackAsync(entrega.DeliveryTag, multiple: false, requeue: true);
+                    span?.SetTag("lab.desfecho", "requeue");
                     break;
             }
+
+            if (desfecho != Desfecho.Confirmada)
+                span.RegistrarFalha(erro ?? new InvalidOperationException($"Processamento terminou com {desfecho}."));
         }
         catch (OperationCanceledException) when (_abortar.IsCancellationRequested)
         {
             // Prazo de shutdown esgotado: sem ack, a mensagem volta para a fila.
+            span?.SetTag("lab.desfecho", "abortado");
         }
         catch (Exception ex)
         {
+            span?.SetTag("lab.desfecho", "requeue");
+            span.RegistrarFalha(ex);
             logger.LogError(ex, "Terminal {TerminalId}: erro inesperado; devolvendo a mensagem para a fila.", terminalId);
             try
             {
@@ -169,6 +182,30 @@ public sealed class ConsumidorTerminais(
         {
             Interlocked.Decrement(ref _emVoo);
         }
+    }
+
+    /// <summary>
+    /// Span "process terminal.{id}" (Consumer), filho do contexto que veio no header traceparent.
+    /// O nome é o template literal (mesmo para todos os terminais); a fila real vai só em atributo.
+    /// Enquanto ele está ativo, o HttpClient da confirmação vira filho dele: o trace segue até a API.
+    /// </summary>
+    private static Activity? IniciarSpanProcess(int terminalId, BasicDeliverEventArgs entrega)
+    {
+        var pai = PropagacaoRabbitMq.Extrair(entrega.BasicProperties.Headers);
+        var span = Telemetria.Fonte.StartActivity("process terminal.{id}", ActivityKind.Consumer, pai);
+        if (span is null)
+            return null;
+
+        span.SetTag("messaging.system", "rabbitmq");
+        span.SetTag("messaging.operation.type", "process");
+        span.SetTag("messaging.operation.name", "process");
+        span.SetTag("messaging.destination.template", "terminal.{id}");
+        span.SetTag("messaging.destination.name", Topologia.FilaTerminal(terminalId));
+        span.SetTag("messaging.rabbitmq.destination.routing_key", entrega.RoutingKey);
+        span.SetTag("messaging.message.id", entrega.BasicProperties.MessageId);
+        span.SetTag("messaging.rabbitmq.message.delivery_tag", (long)entrega.DeliveryTag);
+        span.SetTag("lab.tentativa", Tentativa(entrega));
+        return span;
     }
 
     /// <summary>1 na primeira entrega; x-acquired-count = quantas vezes a mensagem já foi entregue antes.</summary>

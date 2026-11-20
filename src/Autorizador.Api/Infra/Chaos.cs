@@ -2,7 +2,7 @@ namespace Autorizador.Api.Infra;
 
 /// <summary>
 /// Falhas artificiais para os experimentos do lab, lidas de variáveis de ambiente no startup:
-/// CHAOS_SQL_DELAY_MS (atraso antes de cada query) e CHAOS_ERROR_RATE (fração 0..1 de respostas 500).
+/// CHAOS_SQL_DELAY_MS (WAITFOR DELAY em cada query de negócio) e CHAOS_ERROR_RATE (fração 0..1 de respostas 500).
 /// Valor inválido derruba a API no startup, em vez de ser ignorado em silêncio.
 /// </summary>
 public sealed record ChaosOptions(TimeSpan AtrasoSql, double TaxaErro)
@@ -12,8 +12,9 @@ public sealed record ChaosOptions(TimeSpan AtrasoSql, double TaxaErro)
     public static ChaosOptions Ler(IConfiguration config)
     {
         var atrasoMs = config.GetValue<int?>("CHAOS_SQL_DELAY_MS") ?? 0;
-        if (atrasoMs < 0)
-            throw new InvalidOperationException($"CHAOS_SQL_DELAY_MS deve ser >= 0 (recebido: {atrasoMs}).");
+        // Vira um "WAITFOR DELAY 'hh:mm:ss.fff'" na query; o command timeout padrão é 30 s.
+        if (atrasoMs is < 0 or >= 30_000)
+            throw new InvalidOperationException($"CHAOS_SQL_DELAY_MS deve estar entre 0 e 29999 (recebido: {atrasoMs}).");
 
         // O binder de configuração usa cultura invariante: o separador decimal é ponto (0.1).
         var taxa = config.GetValue<double?>("CHAOS_ERROR_RATE") ?? 0;

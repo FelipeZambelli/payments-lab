@@ -5,8 +5,9 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 namespace Autorizador.Api.Saude;
 
 /// <summary>
-/// SELECT 1 no SQL Server. Passa pela SqlConnectionFactory de propósito: com CHAOS_SQL_DELAY_MS
-/// maior que o timeout do check, o /health/ready também fica lento e falha, como num banco lento de verdade.
+/// SELECT 1 no SQL Server. Não sofre o CHAOS_SQL_DELAY_MS (o WAITFOR fica só nas queries do
+/// AutorizacaoRepository): com o chaos ligado, o /health/ready continua rápido, e a lentidão
+/// aparece nos spans de SQL das requisições de negócio.
 /// </summary>
 public sealed class SqlHealthCheck(SqlConnectionFactory conexoes) : IHealthCheck
 {

@@ -146,7 +146,7 @@ variável (ou coloque-a no `.env`). Para desligar, recrie sem ela. Todos os coma
 
 | Variável | Serviço | Padrão | Efeito |
 |---|---|---|---|
-| `CHAOS_SQL_DELAY_MS` | api | 0 | atraso artificial (ms) antes de cada query |
+| `CHAOS_SQL_DELAY_MS` | api | 0 | atraso (ms) dentro de cada query de negócio (`WAITFOR DELAY`), de 0 a 29999 |
 | `CHAOS_ERROR_RATE` | api | 0 | fração 0..1 de requisições que recebem 500 |
 | `CHAOS_WORKER_PAUSED` | worker | false | declara as filas mas não consome |
 
@@ -157,8 +157,10 @@ CHAOS_SQL_DELAY_MS=200 docker compose up -d api
 ```
 
 - O `POST /autorizacoes` faz 3 queries, então fica ~600 ms mais lento. Veja o p50 no LoadGen.
-- Com valor **acima de 3000**, o `SELECT 1` do `/health/ready` estoura o timeout: a API passa a
-  responder 503 no ready e o container fica `unhealthy`. É assim que um banco lento derruba a readiness.
+- O atraso é um `WAITFOR DELAY` prefixado em cada query do repositório: a espera acontece no
+  servidor e aparece na duração do span de SQL (Tópico 1), com o `WAITFOR` visível no `db.query.text`.
+- O health check **não** sofre o atraso: o `SELECT 1` do `/health/ready` continua rápido, mesmo com
+  valores altos. A lentidão do banco fica visível nos traces, e não na readiness do container.
 
 ### `CHAOS_ERROR_RATE`: API instável
 

@@ -17,12 +17,15 @@ public enum Desfecho
     TentarDeNovo,
 }
 
+/// <summary>Desfecho e, nas falhas, a exceção que explica o porquê (vai para o span de process).</summary>
+public readonly record struct Resultado(Desfecho Desfecho, Exception? Erro = null);
+
 /// <summary>"Terminal" simulado: recebe AutorizacaoCriada e confirma na API.</summary>
 public sealed class ProcessadorAutorizacao(IHttpClientFactory httpClients, ILogger<ProcessadorAutorizacao> logger)
 {
     public const string ClienteApi = "autorizador-api";
 
-    public async Task<Desfecho> ProcessarAsync(ReadOnlyMemory<byte> corpo, int terminalId, CancellationToken ct)
+    public async Task<Resultado> ProcessarAsync(ReadOnlyMemory<byte> corpo, int terminalId, CancellationToken ct)
     {
         AutorizacaoCriada? mensagem;
         try
@@ -32,13 +35,13 @@ public sealed class ProcessadorAutorizacao(IHttpClientFactory httpClients, ILogg
         catch (JsonException ex)
         {
             logger.LogWarning("Terminal {TerminalId}: mensagem com JSON inválido ({Erro}); descartando.", terminalId, ex.Message);
-            return Desfecho.Descartar;
+            return new(Desfecho.Descartar, ex);
         }
 
         if (mensagem is null || mensagem.AutorizacaoId == Guid.Empty)
         {
             logger.LogWarning("Terminal {TerminalId}: mensagem sem autorizacaoId; descartando.", terminalId);
-            return Desfecho.Descartar;
+            return new(Desfecho.Descartar, new InvalidDataException("Mensagem sem autorizacaoId."));
         }
 
         var id = mensagem.AutorizacaoId;
@@ -50,29 +53,31 @@ public sealed class ProcessadorAutorizacao(IHttpClientFactory httpClients, ILogg
             if (resposta.IsSuccessStatusCode)
             {
                 logger.LogInformation("Terminal {TerminalId}: autorização {AutorizacaoId} confirmada.", terminalId, id);
-                return Desfecho.Confirmada;
+                return new(Desfecho.Confirmada);
             }
 
             // 4xx (exceto 408/429) não muda com nova tentativa: vai para a DLQ para análise.
             var codigo = (int)resposta.StatusCode;
+            // Resposta HTTP de erro não lança exceção: cria uma descritiva para registrar no span.
+            var erro = new HttpRequestException($"API respondeu {codigo} na confirmação.", null, resposta.StatusCode);
             if (codigo is >= 400 and < 500 && resposta.StatusCode is not (HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests))
             {
                 logger.LogWarning("Terminal {TerminalId}: API respondeu {Status} para {AutorizacaoId}; descartando.", terminalId, codigo, id);
-                return Desfecho.Descartar;
+                return new(Desfecho.Descartar, erro);
             }
 
             logger.LogWarning("Terminal {TerminalId}: API respondeu {Status} para {AutorizacaoId}; vai tentar de novo.", terminalId, codigo, id);
-            return Desfecho.TentarDeNovo;
+            return new(Desfecho.TentarDeNovo, erro);
         }
         catch (HttpRequestException ex)
         {
             logger.LogWarning("Terminal {TerminalId}: falha ao chamar a API para {AutorizacaoId} ({Erro}); vai tentar de novo.", terminalId, id, ex.Message);
-            return Desfecho.TentarDeNovo;
+            return new(Desfecho.TentarDeNovo, ex);
         }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
             logger.LogWarning("Terminal {TerminalId}: timeout chamando a API para {AutorizacaoId}; vai tentar de novo.", terminalId, id);
-            return Desfecho.TentarDeNovo;
+            return new(Desfecho.TentarDeNovo, ex);
         }
     }
 }

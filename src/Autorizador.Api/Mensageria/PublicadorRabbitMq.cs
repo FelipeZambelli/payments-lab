@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Autorizador.Api.Infra;
 using Lab.Contracts;
+using Lab.Telemetria;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 
@@ -54,9 +56,25 @@ public sealed class PublicadorRabbitMq(IOptions<RabbitMqOptions> options, ILogge
         await canal.QueueBindAsync(Topologia.DeadLetterQueue, Topologia.DeadLetterExchange, routingKey: "", cancellationToken: ct);
     }
 
+    /// <summary>
+    /// Abre o span "publish terminais" (Producer) e injeta o contexto dele nos headers da mensagem,
+    /// para o span de process do Worker ser filho deste. O span inclui a espera pelo publisher confirm.
+    /// </summary>
     public async Task PublicarAsync<T>(T mensagem, string routingKey, Guid messageId, CancellationToken ct)
     {
         var canal = _canal ?? throw new InvalidOperationException("Publicador não inicializado.");
+
+        // Nome com cardinalidade baixa ("{operação} {destino}"); o routing key real vai só em atributo.
+        using var span = Telemetria.Fonte.StartActivity($"publish {Topologia.Exchange}", ActivityKind.Producer);
+        span?.SetTag("messaging.system", "rabbitmq");
+        span?.SetTag("messaging.operation.type", "send");
+        span?.SetTag("messaging.operation.name", "publish");
+        span?.SetTag("messaging.destination.name", Topologia.Exchange);
+        span?.SetTag("messaging.rabbitmq.destination.routing_key", routingKey);
+        span?.SetTag("messaging.message.id", messageId.ToString());
+
+        var headers = new Dictionary<string, object?>();
+        PropagacaoRabbitMq.Injetar(span?.Context ?? Activity.Current?.Context ?? default, headers);
 
         var propriedades = new BasicProperties
         {
@@ -65,13 +83,20 @@ public sealed class PublicadorRabbitMq(IOptions<RabbitMqOptions> options, ILogge
             MessageId = messageId.ToString(),
             Type = typeof(T).Name,
             Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            Headers = headers.Count > 0 ? headers : null,
         };
         var corpo = JsonSerializer.SerializeToUtf8Bytes(mensagem, JsonSerializerOptions.Web);
 
         await _lock.WaitAsync(ct);
         try
         {
+            // Com publisherConfirmationTrackingEnabled, lança PublishException se o broker recusar (nack).
             await canal.BasicPublishAsync(Topologia.Exchange, routingKey, mandatory: false, propriedades, corpo, ct);
+        }
+        catch (Exception ex)
+        {
+            span.RegistrarFalha(ex);
+            throw;
         }
         finally
         {

@@ -12,4 +12,13 @@ public static class Telemetria
     public const string NomeFonte = "PaymentsLab";
 
     public static readonly ActivitySource Fonte = new(NomeFonte);
+
+    /// <summary>Registra a exceção no span (evento "exception") e marca o status como Error.</summary>
+    public static void RegistrarFalha(this Activity? span, Exception ex)
+    {
+        if (span is null)
+            return;
+        span.AddException(ex);
+        span.SetStatus(ActivityStatusCode.Error, ex.Message);
+    }
 }

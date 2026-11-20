@@ -1,11 +1,23 @@
 using Autorizador.Api.Banco;
+using Autorizador.Api.Infra;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
 namespace Autorizador.Api.Autorizacoes;
 
-public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes)
+public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes, ChaosOptions chaos)
 {
+    /// <summary>
+    /// CHAOS_SQL_DELAY_MS: "WAITFOR DELAY" antes de cada query de negócio. A espera acontece no
+    /// servidor, então aparece na duração do span de SQL (e no db.query.text). O literal vem de um
+    /// inteiro já validado em ChaosOptions, sem risco de injeção. O health check não passa por aqui.
+    /// </summary>
+    private readonly string _prefixoChaos = chaos.AtrasoSql > TimeSpan.Zero
+        ? $"WAITFOR DELAY '{chaos.AtrasoSql:hh\\:mm\\:ss\\.fff}';\n"
+        : "";
+
+    private string Sql(string sql) => _prefixoChaos + sql;
+
     private const string Colunas = """
         Id, IdempotencyKey, TerminalId, Valor, Bandeira, CartaoToken,
         Status, CriadaEm, PublicadaEm, ConfirmadaEm
@@ -18,7 +30,7 @@ public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes)
     {
         await using var conexao = await conexoes.CriarAsync(ct);
         return await conexao.QuerySingleOrDefaultAsync<Autorizacao>(new CommandDefinition(
-            $"SELECT {Colunas} FROM dbo.Autorizacoes WHERE Id = @id",
+            Sql($"SELECT {Colunas} FROM dbo.Autorizacoes WHERE Id = @id"),
             new { id }, cancellationToken: ct));
     }
 
@@ -26,7 +38,7 @@ public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes)
     {
         await using var conexao = await conexoes.CriarAsync(ct);
         return await conexao.QuerySingleOrDefaultAsync<Autorizacao>(new CommandDefinition(
-            $"SELECT {Colunas} FROM dbo.Autorizacoes WHERE IdempotencyKey = @idempotencyKey",
+            Sql($"SELECT {Colunas} FROM dbo.Autorizacoes WHERE IdempotencyKey = @idempotencyKey"),
             new { idempotencyKey }, cancellationToken: ct));
     }
 
@@ -36,12 +48,12 @@ public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes)
         await using var conexao = await conexoes.CriarAsync(ct);
         try
         {
-            await conexao.ExecuteAsync(new CommandDefinition("""
+            await conexao.ExecuteAsync(new CommandDefinition(Sql("""
                 INSERT INTO dbo.Autorizacoes
                     (Id, IdempotencyKey, TerminalId, Valor, Bandeira, CartaoToken, Status, CriadaEm)
                 VALUES
                     (@Id, @IdempotencyKey, @TerminalId, @Valor, @Bandeira, @CartaoToken, @Status, @CriadaEm)
-                """,
+                """),
                 new
                 {
                     a.Id, a.IdempotencyKey, a.TerminalId, a.Valor, a.Bandeira, a.CartaoToken,
@@ -61,7 +73,7 @@ public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes)
     {
         await using var conexao = await conexoes.CriarAsync(ct);
         await conexao.ExecuteAsync(new CommandDefinition(
-            "UPDATE dbo.Autorizacoes SET PublicadaEm = @publicadaEm WHERE Id = @id AND PublicadaEm IS NULL",
+            Sql("UPDATE dbo.Autorizacoes SET PublicadaEm = @publicadaEm WHERE Id = @id AND PublicadaEm IS NULL"),
             new { id, publicadaEm }, cancellationToken: ct));
     }
 
@@ -69,14 +81,14 @@ public sealed class AutorizacaoRepository(SqlConnectionFactory conexoes)
     public async Task<Autorizacao?> ConfirmarAsync(Guid id, DateTimeOffset confirmadaEm, CancellationToken ct)
     {
         await using var conexao = await conexoes.CriarAsync(ct);
-        return await conexao.QuerySingleOrDefaultAsync<Autorizacao>(new CommandDefinition("""
+        return await conexao.QuerySingleOrDefaultAsync<Autorizacao>(new CommandDefinition(Sql("""
             UPDATE dbo.Autorizacoes
                SET Status = @confirmada, ConfirmadaEm = @confirmadaEm
             OUTPUT inserted.Id, inserted.IdempotencyKey, inserted.TerminalId, inserted.Valor,
                    inserted.Bandeira, inserted.CartaoToken, inserted.Status, inserted.CriadaEm,
                    inserted.PublicadaEm, inserted.ConfirmadaEm
              WHERE Id = @id AND Status = @pendente
-            """,
+            """),
             new
             {
                 id,
